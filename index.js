@@ -1,5 +1,7 @@
 const axios = require("axios");
 const dotenv = require("dotenv");
+const csv = require("csv-parser");
+
 dotenv.config();
 
 // DHIS2 instance configurations
@@ -33,10 +35,10 @@ const destApi = axios.create({
 });
 
 // Function to get all organization units from destination instance
-async function getDestinationOrgUnits() {
+async function getOrganisationUnits() {
     try {
-        const response = await destApi.get(
-            "/api/organisationUnits.json?fields=id,name&paging=false",
+        const response = await sourceApi.get(
+            "/api/organisationUnits.json?fields=id,name&paging=false&filter=level:in:[5,6]",
         );
         return response.data.organisationUnits;
     } catch (error) {
@@ -46,20 +48,17 @@ async function getDestinationOrgUnits() {
 }
 
 // Function to get data for a specific org unit and dataset from source instance
-async function getSourceData(orgUnitId, dataSetId, startDate, endDate) {
+async function getSourceData(orgUnitId, dataSets, startDate, endDate) {
+    const dataSetParams = dataSets.map((ds) => `dataSet=${ds}`).join("&");
+    const url = `/api/dataValueSets.csv?${dataSetParams}&orgUnit=${orgUnitId}&startDate=${startDate}&endDate=${endDate}`;
     try {
-        const response = await sourceApi.get("/api/dataValueSets.json", {
-            params: {
-                dataSet: dataSetId,
-                orgUnit: orgUnitId,
-                startDate: startDate,
-                endDate: endDate,
-            },
-        });
-        return response.data.dataValues || [];
+        const { data } = await sourceApi.get(url);
+        return data;
     } catch (error) {
         console.error(
-            `Error fetching source data for orgUnit ${orgUnitId}, dataSet ${dataSetId}:`,
+            `Error fetching source data for orgUnit ${orgUnitId}, dataSets ${dataSets
+                .map((ds) => ds)
+                .join(",")}`,
             error.message,
         );
         return [];
@@ -69,41 +68,30 @@ async function getSourceData(orgUnitId, dataSetId, startDate, endDate) {
 // Function to post data to destination instance
 async function postDataToDestination(dataValues) {
     try {
-        await destApi.post(
-            "/api/dataValueSets",
-            { dataValues },
-            { params: { async: true } },
-        );
-        console.log(
-            `Successfully posted ${dataValues.length} data values to destination`,
-        );
+        await destApi.post("/api/dataValueSets", dataValues, {
+            params: { async: true },
+            headers: { "Content-Type": "application/csv" },
+        });
+        console.log(`Successfully posted  data values to destination`);
     } catch (error) {
-        console.error("Error posting data to destination:", error.message);
+        console.error(
+            "Error posting data to destination:",
+            error.response.data.response.conflicts,
+        );
     }
 }
 
-// Main function to copy data
 async function copyData(dataSetIds, startDate, endDate) {
-    const destOrgUnits = await getDestinationOrgUnits();
-    for (const orgUnit of destOrgUnits) {
-        for (const dataSetId of dataSetIds) {
-            console.log(
-                `Processing orgUnit: ${orgUnit.name}, dataSet: ${dataSetId}`,
-            );
-            const sourceData = await getSourceData(
-                orgUnit.id,
-                dataSetId,
-                startDate,
-                endDate,
-            );
-            if (sourceData.length > 0) {
-                await postDataToDestination(sourceData);
-            } else {
-                console.log(
-                    `No data found for orgUnit: ${orgUnit.name}, dataSet: ${dataSetId}`,
-                );
-            }
-        }
+    const destinationOrgUnits = await getOrganisationUnits();
+    for (const { id, name } of destinationOrgUnits) {
+        console.log(name);
+        const sourceData = await getSourceData(
+            id,
+            dataSetIds,
+            startDate,
+            endDate,
+        );
+        await postDataToDestination(sourceData);
     }
 }
 
@@ -112,13 +100,12 @@ const dataSetIds = [
     "RtEYsASU7PG",
     "ic1BSWhGOso",
     "nGkMm2VBT4G",
-    "VDhwrW9DiC1",
     "quMWqLxzcfO",
     "dFRD2A5fdvn",
     "DFMoIONIalm",
     "EBqVAQRmiPm",
 ];
-const startDate = "2024-04-01";
+const startDate = "2024-01-01";
 const endDate = "2024-10-31";
 
 copyData(dataSetIds, startDate, endDate)
