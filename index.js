@@ -38,7 +38,7 @@ const destApi = axios.create({
 async function getOrganisationUnits() {
     try {
         const response = await sourceApi.get(
-            "/api/organisationUnits.json?fields=id,name&paging=false&filter=level:in:[5,6]",
+            "/api/organisationUnits.json?fields=id,name&paging=false&filter=level:in:[6,7]",
         );
         return response.data.organisationUnits;
     } catch (error) {
@@ -106,7 +106,7 @@ const dataSetIds = [
     "EBqVAQRmiPm",
 ];
 const startDate = "2024-01-01";
-const endDate = "2024-10-31";
+const endDate = "2024-12-31";
 
 copyData(dataSetIds, startDate, endDate)
     .then(() => {
