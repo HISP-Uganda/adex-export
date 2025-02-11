@@ -1,309 +1,323 @@
 const axios = require("axios");
-const fs = require("fs").promises;
-const csv = require("csv-parse");
-const { createReadStream } = require("fs");
 const dotenv = require("dotenv");
-const { chunk } = require("lodash");
+const { chunk, update } = require("lodash");
+const Papa = require("papaparse");
+
 dotenv.config();
 
 class DHIS2DataTransfer {
-    constructor(sourceConfig, destConfig, batchSize = 1000) {
-        this.sourceApi = axios.create({
-            baseURL: sourceConfig.url.replace(/\/$/, ""),
-            auth: {
-                username: sourceConfig.username,
-                password: sourceConfig.password,
-            },
-            responseType: "arraybuffer",
-        });
+    static DEFAULT_BATCH_SIZE = 1000;
 
-        this.destApi = axios.create({
-            baseURL: destConfig.url.replace(/\/$/, ""),
-            auth: {
-                username: destConfig.username,
-                password: destConfig.password,
-            },
-        });
+    /**
+     * @typedef {Object} DHISConfig
+     * @property {string} url
+     * @property {string} username
+     * @property {string} password
+     */
 
+    /**
+     * @param {DHISConfig} sourceConfig
+     * @param {DHISConfig} destConfig
+     * @param {number} [batchSize=1000]
+     */
+    constructor(
+        sourceConfig,
+        destConfig,
+        batchSize = DHIS2DataTransfer.DEFAULT_BATCH_SIZE,
+    ) {
         this.batchSize = batchSize;
+        this.sourceApi = this.createAxiosInstance(sourceConfig, true);
+        this.destApi = this.createAxiosInstance(destConfig);
     }
 
-    async downloadCSV(dataset, orgUnit, startDate, endDate) {
+    /**
+     * Creates an axios instance with DHIS2 configuration
+     * @private
+     */
+    createAxiosInstance(config, isSource = false) {
+        return axios.create({
+            baseURL: config.url.replace(/\/$/, ""),
+            auth: {
+                username: config.username,
+                password: config.password,
+            },
+            responseType: isSource ? "text" : "json",
+            headers: {
+                Accept: isSource ? "text/csv" : "application/json",
+                "X-Requested-With": "XMLHttpRequest",
+            },
+        });
+    }
+
+    /**
+     * Fetches organisation units from both levels
+     * @private
+     */
+    async fetchOrgUnits(level, fields) {
+        const url = `/api/organisationUnits.json`;
+        const params = {
+            fields,
+            paging: false,
+            level,
+        };
+
         try {
-            console.log(
-                `Downloading CSV data for dataset ${dataset} and orgUnit ${orgUnit.name}...`,
-            );
-
-            const url = `/api/dataValueSets.csv?${dataset
-                .map((id) => `dataSet=${id}`)
-                .join("&")}&orgUnit=${
-                orgUnit.id
-            }&startDate=${startDate}&endDate=${endDate}`;
-            const response = await this.sourceApi.get(url);
-
-            const filename = `dhis2_data_${Date.now()}.csv`;
-            await fs.writeFile(filename, response.data);
-            console.log(`CSV downloaded successfully to ${filename}`);
-            return filename;
+            const { data } = await this.destApi.get(url, { params });
+            return data.organisationUnits;
         } catch (error) {
-            console.error("Error downloading CSV:", error.message);
-            throw error;
+            throw new Error(
+                `Failed to fetch level ${level} organization units: ${error.message}`,
+            );
         }
     }
 
+    /**
+     * Gets combined organisation units
+     */
     async getOrganisations() {
         try {
-            console.log("Downloading organisation data...");
-            const {
-                data: { organisationUnits: ous1 },
-            } = await this.destApi.get(
-                `/api/organisationUnits.json?fields=id,name&paging=false&level=5`,
-            );
-            const {
-                data: { organisationUnits: ous2 },
-            } = await this.destApi.get(
-                `/api/organisationUnits.json?fields=id,name&paging=false&level=6`,
-            );
+            console.log("Fetching organisation units...");
 
-            return [...ous1, ...ous2];
+            const [level7Units, level6Units] = await Promise.all([
+                this.fetchOrgUnits(7, "id,name"),
+                this.fetchOrgUnits(6, "id,name,children"),
+            ]);
+
+            const childlessLevel6Units = level6Units.filter(
+                (ou) => ou.children.length === 0,
+            );
+            const allUnits = [...childlessLevel6Units, ...level7Units];
+
+            console.log(`Found ${allUnits.length} total organization units`);
+            return allUnits;
         } catch (error) {
-            console.error("Error downloading CSV:", error.message);
+            console.error("Failed to fetch organization units:", error.message);
             throw error;
         }
     }
 
-    async processCSVStream(filePath) {
-        return new Promise((resolve, reject) => {
-            let currentBatch = [];
-            let totalProcessed = 0;
-            let batchNumber = 1;
-            let headers = null;
+    /**
+     * Processes a batch of data values
+     * @private
+     */
+    async processDataValuesBatch(dataValues) {
+        if (!dataValues.length) return { imported: 0 };
 
-            // Create read stream
-            const fileStream = fs.createReadStream(filePath);
-
-            // Create parser
-            const parser = csv.parse({
-                delimiter: ",",
-                trim: true,
-                skip_empty_lines: true,
-            });
-
-            // Handle stream events
-            const processRow = async (row) => {
-                try {
-                    if (!headers) {
-                        headers = row;
-                        console.log("Headers:", headers);
-                        return;
-                    }
-
-                    // Convert row to object using headers
-                    const dataValue = {};
-                    headers.forEach((header, index) => {
-                        if (row[index]) {
-                            dataValue[header] = row[index];
-                        }
-                    });
-
-                    // Validate required fields
-                    if (this.validateDataValue(dataValue)) {
-                        currentBatch.push(dataValue);
-                        totalProcessed++;
-
-                        // Process batch if it reaches batch size
-                        if (currentBatch.length >= this.batchSize) {
-                            parser.pause(); // Pause parsing while uploading
-                            await this.processBatch(currentBatch, batchNumber);
-                            currentBatch = [];
-                            batchNumber++;
-                            parser.resume(); // Resume parsing
-                        }
-                    }
-                } catch (error) {
-                    parser.destroy(error);
-                }
-            };
-
-            // Stream pipeline
-            fileStream
-                .pipe(parser)
-                .on("data", async (row) => {
-                    try {
-                        await processRow(row);
-                    } catch (error) {
-                        parser.destroy(error);
-                    }
-                })
-                .on("end", async () => {
-                    try {
-                        // Process any remaining data in the last batch
-                        if (currentBatch.length > 0) {
-                            await this.processBatch(currentBatch, batchNumber);
-                        }
-                        console.log(
-                            `Completed processing ${totalProcessed} records in ${batchNumber} batches`,
-                        );
-                        resolve({
-                            status: "success",
-                            totalProcessed,
-                            batches: batchNumber,
-                        });
-                    } catch (error) {
-                        reject(error);
-                    }
-                })
-                .on("error", (error) => {
-                    console.error("Error processing CSV:", error);
-                    reject(error);
-                });
-        });
-    }
-
-    async uploadJSONBatch(batch, batchNumber, totalBatches) {
         try {
-            console.log(
-                `Uploading batch ${batchNumber}/${totalBatches} (${batch.length} records)...`,
-            );
-
-            const response = await this.destApi.post(
+            const { data } = await this.destApi.post(
                 "/api/dataValueSets",
-                { dataValues: batch },
+                { dataValues },
                 {
-                    headers: {
-                        "Content-Type": "application/json",
-                    },
+                    headers: { "Content-Type": "application/json" },
+                    params: { async: false },
                 },
             );
-
-            console.log(
-                `Batch ${batchNumber} upload completed:`,
-                response.data,
-            );
-            return response.data;
+            return data.response.importCount;
         } catch (error) {
-            console.error(
-                `Error uploading batch ${batchNumber}:`,
-                error.message,
-            );
-            if (error.response) {
-                console.error("Response:", error.response.data);
-            }
-            throw error;
+            throw new Error(`Failed to upload data values: ${error.message}`);
         }
     }
 
-    async transferData(dataset, startDate, endDate) {
-        let csvFile = null;
-        // try {
-        const orgs = await this.getOrganisations();
+    /**
+     * Downloads and processes CSV data for an organization unit
+     * @private
+     */
+    async downloadCSV(datasets, orgUnit, startDate, endDate, current, total) {
+        const params = new URLSearchParams({
+            orgUnit: orgUnit.id,
+            startDate,
+            endDate,
+        });
+        datasets.forEach((id) => params.append("dataSet", id));
 
-        for (const orgUnit of orgs) {
-            // Step 1: Download CSV
-            csvFile = await this.downloadCSV(
-                dataset,
-                orgUnit,
-                startDate,
-                endDate,
+        console.log(
+            `Downloading data for ${orgUnit.name} (${current}/${total})...`,
+        );
+
+        try {
+            const { data: csvData } = await this.sourceApi.get(
+                `/api/dataValueSets.csv?${params.toString()}`,
             );
 
-            // Step 2: Stream and convert CSV to JSON
-            console.log("Converting CSV to JSON...");
-            const dataValues = await this.streamCSVToJSON(csvFile);
+            return new Promise((resolve, reject) => {
+                const dataValues = [];
 
-            // console.log(dataValues);
+                Papa.parse(csvData, {
+                    header: true,
+                    skipEmptyLines: true,
+                    transform: (value) => value.trim(),
+                    step: ({ data }) => {
+                        if (this.isValidDataValue(data)) {
+                            dataValues.push(this.normalizeDataValue(data));
+                        }
+                    },
+                    complete: async () => {
+                        try {
+                            // Process in batches
+                            const batches = chunk(dataValues, this.batchSize);
+                            let totalImported = 0;
+                            let totalIgnored = 0;
+                            let totalDeleted = 0;
+                            let totalUpdated = 0;
 
-            // if (dataValues.length === 0) {
-            //     console.log("No valid data values found in CSV");
-            //     // return {
-            //     //     status: "completed",
-            //     //     message: "No data to transfer",
-            //     // };
-            // }
+                            for (const batch of batches) {
+                                const result =
+                                    await this.processDataValuesBatch(batch);
+                                totalImported += result.imported || 0;
+                                totalIgnored += result.ignored || 0;
+                                totalDeleted += result.deleted || 0;
+                                totalUpdated += result.updated || 0;
+                            }
 
-            // Step 3: Upload in batches
-            // const batches = chunk(dataValues, this.batchSize);
-            // for (let i = 0; i < dataValues.length; i += this.batchSize) {
-            //     batches.push(dataValues.slice(i, i + this.batchSize));
-            // }
-
-            // console.log(`Preparing to upload ${batches.length} batches...`);
-
-            // const results = [];
-            // for (let i = 0; i < batches.length; i++) {
-            //     const result = await this.uploadJSONBatch(
-            //         batches[i],
-            //         i + 1,
-            //         batches.length,
-            //     );
-            //     results.push(result);
-            // }
-
-            // // Step 4: Cleanup
-            // await fs.unlink(csvFile);
-
-            // console.log({
-            //     status: "completed",
-            //     totalRecords: dataValues.length,
-            //     totalBatches: batches.length,
-            //     results: results,
-            // });
+                            resolve({
+                                imported: totalImported,
+                                ignored: totalIgnored,
+                                deleted: totalDeleted,
+                                updated: totalUpdated,
+                            });
+                        } catch (error) {
+                            reject(error);
+                        }
+                    },
+                    error: reject,
+                });
+            });
+        } catch (error) {
+            throw new Error(
+                `Failed to download/process data: ${error.message}`,
+            );
         }
-        // } catch (error) {
-        //     console.error("Transfer failed:", error.message);
-        //     if (csvFile) {
-        //         try {
-        //             await fs.unlink(csvFile);
-        //         } catch (cleanupError) {
-        //             console.error(
-        //                 "Error cleaning up file:",
-        //                 cleanupError.message,
-        //             );
-        //         }
-        //     }
-        //     throw error;
-        // }
+    }
+
+    /**
+     * Validates data value row
+     * @private
+     */
+    isValidDataValue(data) {
+        return [
+            "dataelement",
+            "period",
+            "orgunit",
+            "value",
+            "categoryoptioncombo",
+            "attributeoptioncombo",
+        ].every((field) => Boolean(data[field]?.trim()));
+    }
+
+    /**
+     * Normalizes data value object
+     * @private
+     */
+    normalizeDataValue(data) {
+        return {
+            dataElement: data.dataelement,
+            period: data.period,
+            orgUnit: data.orgunit,
+            categoryOptionCombo: data.categoryoptioncombo,
+            attributeOptionCombo: data.attributeoptioncombo,
+            value: data.value.trim(),
+            storedBy: data.storedby,
+            lastUpdated: data.lastupdated,
+            comment: data.comment,
+            followup: data.followup,
+        };
+    }
+
+    /**
+     * Transfers data between DHIS2 instances
+     */
+    async transferData(datasets, startDate, endDate) {
+        try {
+            const orgUnits = await this.getOrganisations();
+            let totalImported = 0;
+            let totalUpdated = 0;
+            let totalIgnored = 0;
+            let totalDeleted = 0;
+            let errors = [];
+
+            for (const [index, orgUnit] of orgUnits.entries()) {
+                try {
+                    const result = await this.downloadCSV(
+                        datasets,
+                        orgUnit,
+                        startDate,
+                        endDate,
+                        index + 1,
+                        orgUnits.length,
+                    );
+                    totalImported += result.imported;
+                    totalIgnored += result.ignored;
+                    totalDeleted += result.deleted;
+                    totalUpdated += result.updated;
+                    console.log(
+                        `Imported ${result.imported} Ignored ${result.ignored} Deleted ${result.deleted} Updated ${result.updated} values for ${orgUnit.name}`,
+                    );
+                } catch (error) {
+                    errors.push({
+                        orgUnit: orgUnit.name,
+                        error: error.message,
+                    });
+                    console.error(
+                        `Error processing ${orgUnit.name}:`,
+                        error.message,
+                    );
+                }
+            }
+
+            return {
+                totalImported,
+				totalUpdated,
+				totalIgnored,
+				totalDeleted,
+                totalOrgUnits: orgUnits.length,
+                errors: errors.length ? errors : undefined,
+            };
+        } catch (error) {
+            throw new Error(`Transfer failed: ${error.message}`);
+        }
     }
 }
 
-// Example usage
 async function main() {
     try {
-        const sourceConfig = {
-            url: process.env.SOURCE_DHIS2_URL,
-            username: process.env.SOURCE_DHIS2_USERNAME,
-            password: process.env.SOURCE_DHIS2_PASSWORD,
+        const configs = {
+            source: {
+                url: process.env.SOURCE_DHIS2_URL,
+                username: process.env.SOURCE_DHIS2_USERNAME,
+                password: process.env.SOURCE_DHIS2_PASSWORD,
+            },
+            dest: {
+                url: process.env.DEST_DHIS2_URL,
+                username: process.env.DEST_DHIS2_USERNAME,
+                password: process.env.DEST_DHIS2_PASSWORD,
+            },
         };
 
-        const destConfig = {
-            url: process.env.DEST_DHIS2_URL,
-            username: process.env.DEST_DHIS2_USERNAME,
-            password: process.env.DEST_DHIS2_PASSWORD,
-        };
-        const transfer = new DHIS2DataTransfer(sourceConfig, destConfig, 1000);
+        const datasets = [
+            "onFoQ4ko74y",
+            "RtEYsASU7PG",
+            "ic1BSWhGOso",
+            "nGkMm2VBT4G",
+            "VDhwrW9DiC1",
+            "quMWqLxzcfO",
+            "dFRD2A5fdvn",
+            "DFMoIONIalm",
+            "EBqVAQRmiPm",
+        ];
+
+        const transfer = new DHIS2DataTransfer(configs.source, configs.dest);
         const result = await transfer.transferData(
-            [
-                "onFoQ4ko74y",
-                "RtEYsASU7PG",
-                "ic1BSWhGOso",
-                "nGkMm2VBT4G",
-                "VDhwrW9DiC1",
-                "quMWqLxzcfO",
-                "dFRD2A5fdvn",
-                "DFMoIONIalm",
-                "EBqVAQRmiPm",
-            ],
+            datasets,
             "2024-01-01",
-            "2024-10-31",
+            "2024-12-31",
         );
         console.log("Transfer completed:", result);
     } catch (error) {
-        console.error("Main process error:", error.message);
+        console.error("Transfer failed:", error.message);
         process.exit(1);
     }
 }
 
-// Run the script if called directly
 if (require.main === module) {
     main();
 }
