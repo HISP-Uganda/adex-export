@@ -1,9 +1,20 @@
 const axios = require("axios");
 const dotenv = require("dotenv");
-const { chunk, update } = require("lodash");
+const { chunk, update, result } = require("lodash");
 const Papa = require("papaparse");
 
 dotenv.config();
+
+const dataSetPeriods = new Map();
+dataSetPeriods.set("onFoQ4ko74y", "quarterly");
+dataSetPeriods.set("RtEYsASU7PG", "monthly");
+dataSetPeriods.set("ic1BSWhGOso", "monthly");
+dataSetPeriods.set("nGkMm2VBT4G", "monthly");
+dataSetPeriods.set("VDhwrW9DiC1", "monthly");
+dataSetPeriods.set("quMWqLxzcfO", "monthly");
+dataSetPeriods.set("dFRD2A5fdvn", "quarterly");
+dataSetPeriods.set("DFMoIONIalm", "quarterly");
+dataSetPeriods.set("EBqVAQRmiPm", "monthly");
 
 class DHIS2DataTransfer {
     static DEFAULT_BATCH_SIZE = 1000;
@@ -70,6 +81,31 @@ class DHIS2DataTransfer {
             );
         }
     }
+    async fetchDataElements() {
+        const url = `/api/dataSets.json`;
+        const params = {
+            fields: "id,dataSetElements[dataElement[id,name]]",
+            paging: false,
+            filter: `id:in:[onFoQ4ko74y,RtEYsASU7PG,ic1BSWhGOso,nGkMm2VBT4G,VDhwrW9DiC1,quMWqLxzcfO,dFRD2A5fdvn,DFMoIONIalm,EBqVAQRmiPm]`,
+        };
+
+        try {
+            const { data } = await this.destApi.get(url, { params });
+            return data.dataSets.flatMap((ds) =>
+                ds.dataSetElements.map((de) => {
+                    return {
+                        id: de.dataElement.id,
+                        name: de.dataElement.name,
+                        period: dataSetPeriods.get(ds.id),
+                    };
+                }),
+            );
+        } catch (error) {
+            throw new Error(
+                `Failed to fetch level ${level} organization units: ${error.message}`,
+            );
+        }
+    }
 
     /**
      * Gets combined organisation units
@@ -98,11 +134,10 @@ class DHIS2DataTransfer {
                 { dataValues },
                 {
                     headers: { "Content-Type": "application/json" },
-                    params: { async: false },
+                    params: { async: true },
                 },
             );
-            const { importCount, conflicts } = data.response;
-            return { importCount, conflicts };
+            return data;
         } catch (error) {
             const { importCount, conflicts } = error.response.data.response;
             return { importCount, conflicts };
@@ -113,19 +148,16 @@ class DHIS2DataTransfer {
      * Downloads and processes CSV data for an organization unit
      * @private
      */
-    async downloadCSV(dataSet, orgUnit, period, current, total) {
+    async downloadCSV({ id, name, total, current }) {
         try {
-            const params = new URLSearchParams({
-                orgUnit: orgUnit.id,
-                period,
-                dataSet,
-                children: true,
-            });
-            console.log(
-                `Downloading data for ${orgUnit.name} for dataset ${dataSet} (${current}/${total})...`,
-            );
+            console.log(`Downloading data for ${name} (${current}/${total})`);
             const { data } = await this.sourceApi.get(
-                `/api/dataValueSets.csv?${params.toString()}`,
+                `/api/sqlViews/wiwtLN4FKl5/data.csv`,
+                { params: { var: `dx:${id}` } },
+            );
+
+            console.log(
+                `Finished Downloading data for ${name} (${current}/${total})`,
             );
 
             return new Promise((resolve, reject) => {
@@ -141,30 +173,15 @@ class DHIS2DataTransfer {
                         }
                     },
                     complete: async () => {
+                        const results = [];
                         const batches = chunk(dataValues, this.batchSize);
-                        let totalImported = 0;
-                        let totalIgnored = 0;
-                        let totalDeleted = 0;
-                        let totalUpdated = 0;
-                        let conflicts = [];
-
                         for (const batch of batches) {
                             const result = await this.processDataValuesBatch(
                                 batch,
                             );
-                            totalImported += result.importCount.imported || 0;
-                            totalIgnored += result.importCount.ignored || 0;
-                            totalDeleted += result.importCount.deleted || 0;
-                            totalUpdated += result.importCount.updated || 0;
-                            conflicts = conflicts.concat(result.conflicts);
+                            results.push(result);
                         }
-                        resolve({
-                            imported: totalImported,
-                            ignored: totalIgnored,
-                            deleted: totalDeleted,
-                            updated: totalUpdated,
-                            conflicts,
-                        });
+                        resolve(results);
                     },
                     error: reject,
                 });
@@ -181,14 +198,9 @@ class DHIS2DataTransfer {
      * @private
      */
     isValidDataValue(data) {
-        return [
-            "dataelement",
-            "period",
-            "orgunit",
-            "value",
-            "categoryoptioncombo",
-            "attributeoptioncombo",
-        ].every((field) => Boolean(data[field]?.trim()));
+        return ["dx", "pe", "ou", "value", "co", "ao"].every((field) =>
+            Boolean(data[field]?.trim()),
+        );
     }
 
     /**
@@ -197,77 +209,40 @@ class DHIS2DataTransfer {
      */
     normalizeDataValue(data) {
         return {
-            dataElement: data.dataelement,
-            period: data.period,
-            orgUnit: data.orgunit,
-            categoryOptionCombo: data.categoryoptioncombo,
-            attributeOptionCombo: data.attributeoptioncombo,
+            dataElement: data.dx,
+            period: data.pe,
+            orgUnit: data.ou,
+            categoryOptionCombo: data.co,
+            attributeOptionCombo: data.ao,
             value: data.value.trim(),
-            storedBy: data.storedby,
-            lastUpdated: data.lastupdated,
-            comment: data.comment,
-            followup: data.followup,
         };
     }
 
     /**
      * Transfers data between DHIS2 instances
      */
-    async transferData(dataSet, period) {
+    async transferData() {
         try {
-            const orgUnits = await this.getOrganisations();
-            let totalImported = 0;
-            let totalUpdated = 0;
-            let totalIgnored = 0;
-            let totalDeleted = 0;
-            let errors = [];
-
-            for (const [index, orgUnit] of orgUnits.entries()) {
-                try {
-                    const result = await this.downloadCSV(
-                        dataSet,
-                        orgUnit,
-                        period,
-                        index + 1,
-                        orgUnits.length,
-                    );
-                    const { imported, ignored, deleted, updated, conflicts } =
-                        result;
-                    totalImported += imported;
-                    totalIgnored += ignored;
-                    totalDeleted += deleted;
-                    totalUpdated += updated;
-                    console.log(conflicts);
-                    console.log(
-                        `Imported ${imported} Ignored ${ignored} Deleted ${deleted} Updated ${updated} values for ${orgUnit.name}`,
-                    );
-                } catch (error) {
-                    errors.push({
-                        orgUnit: orgUnit.name,
-                        error: error.message,
-                    });
-                    console.error(
-                        `Error processing ${orgUnit.name}:`,
-                        error.message,
-                    );
-                }
+            const dataElements = await this.fetchDataElements();
+            let allResults = [];
+            for (const [index, { id, name }] of dataElements.entries()) {
+                const results = await this.downloadCSV({
+                    id,
+                    name,
+                    total: dataElements.length,
+                    current: index + 1,
+                });
+                console.log(results);
+                allResults = allResults.concat(results);
             }
-
-            return {
-                totalImported,
-                totalUpdated,
-                totalIgnored,
-                totalDeleted,
-                totalOrgUnits: orgUnits.length,
-                errors: errors.length ? errors : undefined,
-            };
+            return allResults;
         } catch (error) {
             throw new Error(`Transfer failed: ${error.message}`);
         }
     }
 }
 
-async function main(dataSet, periods) {
+async function main() {
     try {
         const configs = {
             source: {
@@ -282,23 +257,15 @@ async function main(dataSet, periods) {
             },
         };
         const transfer = new DHIS2DataTransfer(configs.source, configs.dest);
-        for (const period of periods) {
-            const result = await transfer.transferData(dataSet, period);
-            console.log(result);
-        }
+        const result = await transfer.transferData();
+        console.log(result);
     } catch (error) {
         console.error("Transfer failed:", error.message);
-        process.exit(1);
     }
 }
 
 if (require.main === module) {
-    const args = process.argv.slice(2);
-    if (args[1] === "monthly") {
-        main(args[0], process.env.MONTHLY_PERIODS.split(","));
-    } else if (args[1] === "quarterly") {
-        main(args[0], process.env.QUARTERLY_PERIODS.split(","));
-    }
+    main();
 }
 
 module.exports = DHIS2DataTransfer;
