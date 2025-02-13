@@ -134,7 +134,7 @@ class DHIS2DataTransfer {
                 { dataValues },
                 {
                     headers: { "Content-Type": "application/json" },
-                    params: { async: true },
+                    params: { async: false },
                 },
             );
             return data;
@@ -155,7 +155,6 @@ class DHIS2DataTransfer {
                 `/api/sqlViews/wiwtLN4FKl5/data.csv`,
                 { params: { var: `dx:${id}` } },
             );
-
             console.log(
                 `Finished Downloading data for ${name} (${current}/${total})`,
             );
@@ -175,6 +174,7 @@ class DHIS2DataTransfer {
                     complete: async () => {
                         const results = [];
                         const batches = chunk(dataValues, this.batchSize);
+						
                         for (const batch of batches) {
                             const result = await this.processDataValuesBatch(
                                 batch,
@@ -214,7 +214,7 @@ class DHIS2DataTransfer {
             orgUnit: data.ou,
             categoryOptionCombo: data.co,
             attributeOptionCombo: data.ao,
-            value: data.value.trim(),
+            value: data.value.trim().split(".")[0],
         };
     }
 
@@ -225,7 +225,7 @@ class DHIS2DataTransfer {
         try {
             const dataElements = await this.fetchDataElements();
             let allResults = [];
-            for (const [index, { id, name }] of dataElements.entries()) {
+            for (const [index, { id, name }] of dataElements.reverse().entries()) {
                 const results = await this.downloadCSV({
                     id,
                     name,
