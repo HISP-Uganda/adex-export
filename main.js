@@ -134,7 +134,7 @@ class DHIS2DataTransfer {
                 { dataValues },
                 {
                     headers: { "Content-Type": "application/json" },
-                    params: { async: false },
+                    params: { async: true },
                 },
             );
             return data;
@@ -232,7 +232,6 @@ class DHIS2DataTransfer {
                     total: dataElements.length,
                     current: index + 1,
                 });
-                console.log(results);
                 allResults = allResults.concat(results);
             }
             return allResults;
@@ -258,7 +257,6 @@ async function main() {
         };
         const transfer = new DHIS2DataTransfer(configs.source, configs.dest);
         const result = await transfer.transferData();
-        console.log(result);
     } catch (error) {
         console.error("Transfer failed:", error.message);
     }
