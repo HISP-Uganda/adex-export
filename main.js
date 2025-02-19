@@ -1,6 +1,6 @@
 const axios = require("axios");
 const dotenv = require("dotenv");
-const { chunk, update, result } = require("lodash");
+const { chunk, orderBy } = require("lodash");
 const Papa = require("papaparse");
 
 dotenv.config();
@@ -97,12 +97,11 @@ class DHIS2DataTransfer {
                     return {
                         id: de.dataElement.id,
                         name: de.dataElement.name,
-                        period: dataSetPeriods.get(ds.id),
                     };
                 }),
             );
         } catch (error) {
-            throw new Error(
+            console.log(
                 `Failed to fetch level ${level} organization units: ${error.message}`,
             );
         }
@@ -118,7 +117,6 @@ class DHIS2DataTransfer {
             return units;
         } catch (error) {
             console.error("Failed to fetch organization units:", error.message);
-            throw error;
         }
     }
 
@@ -141,7 +139,20 @@ class DHIS2DataTransfer {
             const { importCount } = data.response;
             console.log(importCount);
         } catch (error) {
-            console.log(error.message);
+            if (
+                error &&
+                error.response &&
+                error.response.data &&
+                error.response.data.response
+            ) {
+                if (error.response.data.response.conflicts) {
+                    console.log(error.response.data.response.conflicts);
+                }
+
+                if (error.response.data.response.importCount) {
+                    console.log(error.response.data.response.importCount);
+                }
+            }
         }
     }
 
