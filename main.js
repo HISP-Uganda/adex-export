@@ -271,7 +271,7 @@ async function main() {
         const result = await transfer.transferData();
         console.log(result);
     } catch (error) {
-        console.error("Transfer failed:", error.message);
+        console.log("Transfer failed:", error.message);
     }
 }
 
