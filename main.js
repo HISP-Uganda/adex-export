@@ -238,17 +238,21 @@ class DHIS2DataTransfer {
             for (const [index, { id, name }] of dataElements
                 .reverse()
                 .entries()) {
-                const results = await this.downloadCSV({
-                    id,
-                    name,
-                    total: dataElements.length,
-                    current: index + 1,
-                });
-                allResults = allResults.concat(results);
+                try {
+					const results = await this.downloadCSV({
+                        id,
+                        name,
+                        total: dataElements.length,
+                        current: index + 1,
+                    });
+                    allResults = allResults.concat(results);
+				} catch (error) {
+					console.log(error)
+				}
             }
             return allResults;
         } catch (error) {
-            throw new Error(`Transfer failed: ${error.message}`);
+            console.log("Transfer failed:", error.message);
         }
     }
 }
