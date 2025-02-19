@@ -82,6 +82,7 @@ class DHIS2DataTransfer {
         }
     }
     async fetchDataElements() {
+        console.log("Fetching data elements...");
         const url = `/api/dataSets.json`;
         const params = {
             fields: "id,dataSetElements[dataElement[id,name]]",
@@ -140,7 +141,7 @@ class DHIS2DataTransfer {
             const { importCount } = data.response;
             console.log(importCount);
         } catch (error) {
-            console.log(error.message)
+            console.log(error.message);
         }
     }
 
@@ -187,9 +188,7 @@ class DHIS2DataTransfer {
                 });
             });
         } catch (error) {
-            throw new Error(
-                `Failed to download/process data: ${error.message}`,
-            );
+            console(error.message);
         }
     }
 

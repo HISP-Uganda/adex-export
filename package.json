@@ -1,20 +1,20 @@
 {
-  "name": "adex-copy",
-  "version": "1.0.0",
-  "description": "",
-  "main": "index.js",
-  "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
-  },
-  "keywords": [],
-  "author": "",
-  "license": "ISC",
-  "dependencies": {
-    "axios": "^1.7.7",
-    "csv-parse": "^5.5.6",
-    "csv-parser": "^3.0.0",
-    "dotenv": "^16.4.5",
-    "lodash": "^4.17.21",
-    "papaparse": "^5.5.2"
-  }
+    "name": "adex-copy",
+    "version": "1.0.0",
+    "description": "",
+    "main": "index.js",
+    "scripts": {
+        "test": "echo \"Error: no test specified\" && exit 1"
+    },
+    "keywords": [],
+    "author": "",
+    "license": "ISC",
+    "dependencies": {
+        "axios": "^1.7.7",
+        "csv-parse": "^5.5.6",
+        "csv-parser": "^3.0.0",
+        "dotenv": "^16.4.5",
+        "lodash": "^4.17.21",
+        "papaparse": "^5.5.2"
+    }
 }
