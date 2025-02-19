@@ -134,12 +134,14 @@ class DHIS2DataTransfer {
                 { dataValues },
                 {
                     headers: { "Content-Type": "application/json" },
-                    params: { async: true },
+                    params: { async: false },
                 },
             );
-            return data;
+            const { importCount } = data.response;
+            console.log(importCount);
         } catch (error) {
             const { importCount, conflicts } = error.response.data.response;
+            console.log(importCount);
             return { importCount, conflicts };
         }
     }
@@ -174,7 +176,7 @@ class DHIS2DataTransfer {
                     complete: async () => {
                         const results = [];
                         const batches = chunk(dataValues, this.batchSize);
-						
+
                         for (const batch of batches) {
                             const result = await this.processDataValuesBatch(
                                 batch,
@@ -225,7 +227,9 @@ class DHIS2DataTransfer {
         try {
             const dataElements = await this.fetchDataElements();
             let allResults = [];
-            for (const [index, { id, name }] of dataElements.reverse().entries()) {
+            for (const [index, { id, name }] of dataElements
+                .reverse()
+                .entries()) {
                 const results = await this.downloadCSV({
                     id,
                     name,
@@ -257,6 +261,7 @@ async function main() {
         };
         const transfer = new DHIS2DataTransfer(configs.source, configs.dest);
         const result = await transfer.transferData();
+		console.log(result)
     } catch (error) {
         console.error("Transfer failed:", error.message);
     }
