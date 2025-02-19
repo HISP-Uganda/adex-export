@@ -140,16 +140,7 @@ class DHIS2DataTransfer {
             const { importCount } = data.response;
             console.log(importCount);
         } catch (error) {
-            if (
-                error &&
-                error.response &&
-                error.response.data &&
-                error.response.data.response
-            ) {
-                const { importCount, conflicts } = error.response.data.response;
-                console.log(importCount);
-                return { importCount, conflicts };
-            }
+            console.log(error.message)
         }
     }
 
