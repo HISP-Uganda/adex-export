@@ -140,9 +140,16 @@ class DHIS2DataTransfer {
             const { importCount } = data.response;
             console.log(importCount);
         } catch (error) {
-            const { importCount, conflicts } = error.response.data.response;
-            console.log(importCount);
-            return { importCount, conflicts };
+            if (
+                error &&
+                error.response &&
+                error.response.data &&
+                error.response.data.response
+            ) {
+                const { importCount, conflicts } = error.response.data.response;
+                console.log(importCount);
+                return { importCount, conflicts };
+            }
         }
     }
 
@@ -261,7 +268,7 @@ async function main() {
         };
         const transfer = new DHIS2DataTransfer(configs.source, configs.dest);
         const result = await transfer.transferData();
-		console.log(result)
+        console.log(result);
     } catch (error) {
         console.error("Transfer failed:", error.message);
     }
