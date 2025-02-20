@@ -76,7 +76,7 @@ class DHIS2DataTransfer {
             const { data } = await this.destApi.get(url, { params });
             return data.organisationUnits;
         } catch (error) {
-            throw new Error(
+            console.log(
                 `Failed to fetch level ${level} organization units: ${error.message}`,
             );
         }
@@ -120,7 +120,7 @@ class DHIS2DataTransfer {
      * @private
      */
     async processDataValuesBatch(dataValues) {
-		console.log(`Importing ${dataValues.length} data values...`);
+        console.log(`Importing ${dataValues.length} data values...`);
         if (!dataValues.length) return { imported: 0 };
 
         try {
@@ -156,7 +156,16 @@ class DHIS2DataTransfer {
      * Downloads and processes CSV data for an organization unit
      * @private
      */
-    async downloadCSV(datasets, orgUnit, startDate, endDate, current, total,dataElements) {
+    async downloadCSV(
+        datasets,
+        orgUnit,
+        startDate,
+        endDate,
+        current,
+        total,
+        dataElements,
+    ) {
+        console.log(dataElements);
         const params = new URLSearchParams({
             orgUnit: orgUnit.id,
             startDate,
@@ -192,7 +201,9 @@ class DHIS2DataTransfer {
                     complete: async () => {
                         try {
                             const batches = chunk(
-                                dataValues.filter((dv) => dataElements.includes(dv.dataElement)),
+                                dataValues.filter((dv) =>
+                                    dataElements.includes(dv.dataElement),
+                                ),
                                 this.batchSize,
                             );
                             let totalImported = 0;
@@ -207,8 +218,6 @@ class DHIS2DataTransfer {
                                 totalIgnored += result.ignored || 0;
                                 totalDeleted += result.deleted || 0;
                                 totalUpdated += result.updated || 0;
-
-                                console.log(result);
                             }
 
                             resolve({
@@ -273,7 +282,7 @@ class DHIS2DataTransfer {
     async transferData(datasets, startDate, endDate) {
         try {
             const orgUnits = await this.getOrganisations();
-			const dataElements = await this.fetchDataElements();
+            const dataElements = await this.fetchDataElements();
             let totalImported = 0;
             let totalUpdated = 0;
             let totalIgnored = 0;
@@ -282,21 +291,14 @@ class DHIS2DataTransfer {
 
             for (const [index, orgUnit] of orgUnits.entries()) {
                 try {
-                    const result = await this.downloadCSV(
+                    await this.downloadCSV(
                         datasets,
                         orgUnit,
                         startDate,
                         endDate,
                         index + 1,
                         orgUnits.length,
-						dataElements
-                    );
-                    totalImported += result.imported;
-                    totalIgnored += result.ignored;
-                    totalDeleted += result.deleted;
-                    totalUpdated += result.updated;
-                    console.log(
-                        `Imported ${result.imported} Ignored ${result.ignored} Deleted ${result.deleted} Updated ${result.updated} values for ${orgUnit.name}`,
+                        dataElements,
                     );
                 } catch (error) {
                     errors.push({
