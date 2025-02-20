@@ -93,12 +93,7 @@ class DHIS2DataTransfer {
         try {
             const { data } = await this.destApi.get(url, { params });
             return data.dataSets.flatMap((ds) =>
-                ds.dataSetElements.map((de) => {
-                    return {
-                        id: de.dataElement.id,
-                        name: de.dataElement.name,
-                    };
-                }),
+                ds.dataSetElements.map((de) => de.dataElement.id),
             );
         } catch (error) {
             console.log(
@@ -125,6 +120,7 @@ class DHIS2DataTransfer {
      * @private
      */
     async processDataValuesBatch(dataValues) {
+		console.log(`Importing ${dataValues.length} data values...`);
         if (!dataValues.length) return { imported: 0 };
 
         try {
@@ -160,21 +156,31 @@ class DHIS2DataTransfer {
      * Downloads and processes CSV data for an organization unit
      * @private
      */
-    async downloadCSV({ id, name, total, current }) {
+    async downloadCSV(datasets, orgUnit, startDate, endDate, current, total,dataElements) {
+        const params = new URLSearchParams({
+            orgUnit: orgUnit.id,
+            startDate,
+            endDate,
+            children: true,
+        });
+        datasets.forEach((id) => params.append("dataSet", id));
+
+        console.log(
+            `Downloading data for ${orgUnit.name} (${current}/${total})...`,
+        );
+
         try {
-            console.log(`Downloading data for ${name} (${current}/${total})`);
-            const { data } = await this.sourceApi.get(
-                `/api/sqlViews/wiwtLN4FKl5/data.csv`,
-                { params: { var: `dx:${id}` } },
+            const { data: csvData } = await this.sourceApi.get(
+                `/api/dataValueSets.csv?${params.toString()}`,
             );
             console.log(
-                `Finished Downloading data for ${name} (${current}/${total})`,
+                `Finished Downloading data for ${orgUnit.name} (${current}/${total})...`,
             );
 
             return new Promise((resolve, reject) => {
                 const dataValues = [];
 
-                Papa.parse(data, {
+                Papa.parse(csvData, {
                     header: true,
                     skipEmptyLines: true,
                     transform: (value) => value.trim(),
@@ -184,22 +190,42 @@ class DHIS2DataTransfer {
                         }
                     },
                     complete: async () => {
-                        const results = [];
-                        const batches = chunk(dataValues, this.batchSize);
-
-                        for (const batch of batches) {
-                            const result = await this.processDataValuesBatch(
-                                batch,
+                        try {
+                            const batches = chunk(
+                                dataValues.filter((dv) => dataElements.includes(dv.dataElement)),
+                                this.batchSize,
                             );
-                            results.push(result);
+                            let totalImported = 0;
+                            let totalIgnored = 0;
+                            let totalDeleted = 0;
+                            let totalUpdated = 0;
+
+                            for (const batch of batches) {
+                                const result =
+                                    await this.processDataValuesBatch(batch);
+                                totalImported += result.imported || 0;
+                                totalIgnored += result.ignored || 0;
+                                totalDeleted += result.deleted || 0;
+                                totalUpdated += result.updated || 0;
+
+                                console.log(result);
+                            }
+
+                            resolve({
+                                imported: totalImported,
+                                ignored: totalIgnored,
+                                deleted: totalDeleted,
+                                updated: totalUpdated,
+                            });
+                        } catch (error) {
+                            reject(error);
                         }
-                        resolve(results);
                     },
                     error: reject,
                 });
             });
         } catch (error) {
-            console(error.message);
+            console.log(`Failed to download/process data: ${error.message}`);
         }
     }
 
@@ -207,10 +233,19 @@ class DHIS2DataTransfer {
      * Validates data value row
      * @private
      */
+    /**
+     * Validates data value row
+     * @private
+     */
     isValidDataValue(data) {
-        return ["dx", "pe", "ou", "value", "co", "ao"].every((field) =>
-            Boolean(data[field]?.trim()),
-        );
+        return [
+            "dataelement",
+            "period",
+            "orgunit",
+            "value",
+            "categoryoptioncombo",
+            "attributeoptioncombo",
+        ].every((field) => Boolean(data[field]?.trim()));
     }
 
     /**
@@ -219,40 +254,72 @@ class DHIS2DataTransfer {
      */
     normalizeDataValue(data) {
         return {
-            dataElement: data.dx,
-            period: data.pe,
-            orgUnit: data.ou,
-            categoryOptionCombo: data.co,
-            attributeOptionCombo: data.ao,
-            value: data.value.trim().split(".")[0],
+            dataElement: data.dataelement,
+            period: data.period,
+            orgUnit: data.orgunit,
+            categoryOptionCombo: data.categoryoptioncombo,
+            attributeOptionCombo: data.attributeoptioncombo,
+            value: data.value.trim(),
+            storedBy: data.storedby,
+            lastUpdated: data.lastupdated,
+            comment: data.comment,
+            followup: data.followup,
         };
     }
 
     /**
      * Transfers data between DHIS2 instances
      */
-    async transferData() {
+    async transferData(datasets, startDate, endDate) {
         try {
-            const dataElements = await this.fetchDataElements();
-            let allResults = [];
-            for (const [index, { id, name }] of dataElements
-                .reverse()
-                .entries()) {
+            const orgUnits = await this.getOrganisations();
+			const dataElements = await this.fetchDataElements();
+            let totalImported = 0;
+            let totalUpdated = 0;
+            let totalIgnored = 0;
+            let totalDeleted = 0;
+            let errors = [];
+
+            for (const [index, orgUnit] of orgUnits.entries()) {
                 try {
-					const results = await this.downloadCSV({
-                        id,
-                        name,
-                        total: dataElements.length,
-                        current: index + 1,
+                    const result = await this.downloadCSV(
+                        datasets,
+                        orgUnit,
+                        startDate,
+                        endDate,
+                        index + 1,
+                        orgUnits.length,
+						dataElements
+                    );
+                    totalImported += result.imported;
+                    totalIgnored += result.ignored;
+                    totalDeleted += result.deleted;
+                    totalUpdated += result.updated;
+                    console.log(
+                        `Imported ${result.imported} Ignored ${result.ignored} Deleted ${result.deleted} Updated ${result.updated} values for ${orgUnit.name}`,
+                    );
+                } catch (error) {
+                    errors.push({
+                        orgUnit: orgUnit.name,
+                        error: error.message,
                     });
-                    allResults = allResults.concat(results);
-				} catch (error) {
-					console.log(error)
-				}
+                    console.error(
+                        `Error processing ${orgUnit.name}:`,
+                        error.message,
+                    );
+                }
             }
-            return allResults;
+
+            return {
+                totalImported,
+                totalUpdated,
+                totalIgnored,
+                totalDeleted,
+                totalOrgUnits: orgUnits.length,
+                errors: errors.length ? errors : undefined,
+            };
         } catch (error) {
-            console.log("Transfer failed:", error.message);
+            console.log(`Transfer failed: ${error.message}`);
         }
     }
 }
@@ -271,11 +338,28 @@ async function main() {
                 password: process.env.DEST_DHIS2_PASSWORD,
             },
         };
+
+        const datasets = [
+            "onFoQ4ko74y",
+            "RtEYsASU7PG",
+            "ic1BSWhGOso",
+            "nGkMm2VBT4G",
+            "VDhwrW9DiC1",
+            "quMWqLxzcfO",
+            "dFRD2A5fdvn",
+            "DFMoIONIalm",
+            "EBqVAQRmiPm",
+        ];
+
         const transfer = new DHIS2DataTransfer(configs.source, configs.dest);
-        const result = await transfer.transferData();
-        console.log(result);
+        const result = await transfer.transferData(
+            datasets,
+            "2024-01-01",
+            "2024-12-31",
+        );
+        console.log("Transfer completed:", result);
     } catch (error) {
-        console.log("Transfer failed:", error.message);
+        console.error("Transfer failed:", error.message);
     }
 }
 
