@@ -165,7 +165,6 @@ class DHIS2DataTransfer {
         total,
         dataElements,
     ) {
-        console.log(dataElements);
         const params = new URLSearchParams({
             orgUnit: orgUnit.id,
             startDate,
@@ -206,25 +205,13 @@ class DHIS2DataTransfer {
                                 ),
                                 this.batchSize,
                             );
-                            let totalImported = 0;
-                            let totalIgnored = 0;
-                            let totalDeleted = 0;
-                            let totalUpdated = 0;
 
                             for (const batch of batches) {
-                                const result =
-                                    await this.processDataValuesBatch(batch);
-                                totalImported += result.imported || 0;
-                                totalIgnored += result.ignored || 0;
-                                totalDeleted += result.deleted || 0;
-                                totalUpdated += result.updated || 0;
+                                await this.processDataValuesBatch(batch);
                             }
 
                             resolve({
-                                imported: totalImported,
-                                ignored: totalIgnored,
-                                deleted: totalDeleted,
-                                updated: totalUpdated,
+                                processed: true,
                             });
                         } catch (error) {
                             reject(error);
