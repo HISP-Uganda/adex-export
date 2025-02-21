@@ -129,26 +129,12 @@ class DHIS2DataTransfer {
                 { dataValues },
                 {
                     headers: { "Content-Type": "application/json" },
-                    params: { async: false },
+                    params: { async: true },
                 },
             );
-            const { importCount } = data.response;
-            console.log(importCount);
+            console.log(data)
         } catch (error) {
-            if (
-                error &&
-                error.response &&
-                error.response.data &&
-                error.response.data.response
-            ) {
-                if (error.response.data.response.conflicts) {
-                    console.log(error.response.data.response.conflicts);
-                }
-
-                if (error.response.data.response.importCount) {
-                    console.log(error.response.data.response.importCount);
-                }
-            }
+           console.log(error.message)
         }
     }
 
@@ -343,7 +329,7 @@ async function main() {
         const transfer = new DHIS2DataTransfer(configs.source, configs.dest);
         const result = await transfer.transferData(
             datasets,
-            "2024-01-01",
+            "2024-10-01",
             "2024-12-31",
         );
         console.log("Transfer completed:", result);
