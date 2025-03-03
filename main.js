@@ -137,7 +137,7 @@ class DHIS2DataTransfer {
     async getOrganisations() {
         try {
             console.log("Fetching organisation units...");
-            const units = await Promise.all([this.fetchOrgUnits(5, "id,name")]);
+            const units = await Promise.all([this.fetchOrgUnits(3, "id,name")]);
             return units;
         } catch (error) {
             console.error("Failed to fetch organization units:", error.message);
@@ -158,12 +158,12 @@ class DHIS2DataTransfer {
                 { dataValues },
                 {
                     headers: { "Content-Type": "application/json" },
-                    params: { async: false },
+                    params: { async: true },
                 },
             );
-            console.log(JSON.stringify(data.response.importCount));
+            console.log(JSON.stringify(data));
         } catch (error) {
-            console.log(error.response.data.response.importCount);
+            console.log(error.response.data);
             console.log(error.message);
         }
     }
@@ -179,7 +179,6 @@ class DHIS2DataTransfer {
         endDate,
         current,
         total,
-        dataElements,
     ) {
         const params = new URLSearchParams({
             orgUnit: orgUnit.id,
@@ -213,12 +212,7 @@ class DHIS2DataTransfer {
                 },
                 complete: async () => {
                     try {
-                        const batches = chunk(
-                            dataValues.filter((dv) =>
-                                dataElements.includes(dv.dataElement),
-                            ),
-                            this.batchSize,
-                        );
+                        const batches = chunk(dataValues, this.batchSize);
                         for (const batch of batches) {
                             await this.processDataValuesBatch(batch);
                         }
@@ -277,7 +271,7 @@ class DHIS2DataTransfer {
      */
     async transferData(datasets, startDate, endDate) {
         try {
-            const { dataElements, organisationUnits } =
+            const { organisationUnits } =
                 await this.fetchDataElements(datasets);
             let errors = [];
             for (const [index, orgUnit] of organisationUnits.entries()) {
@@ -289,7 +283,6 @@ class DHIS2DataTransfer {
                         endDate,
                         index + 1,
                         organisationUnits.length,
-                        dataElements,
                     );
                 } catch (error) {
                     errors.push({
