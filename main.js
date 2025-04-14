@@ -1,20 +1,9 @@
 const axios = require("axios");
 const dotenv = require("dotenv");
-const { chunk, orderBy, uniqBy, uniq } = require("lodash");
+const { chunk } = require("lodash");
 const Papa = require("papaparse");
 
 dotenv.config();
-
-const dataSetPeriods = new Map();
-dataSetPeriods.set("onFoQ4ko74y", "quarterly");
-dataSetPeriods.set("RtEYsASU7PG", "monthly");
-dataSetPeriods.set("ic1BSWhGOso", "monthly");
-dataSetPeriods.set("nGkMm2VBT4G", "monthly");
-dataSetPeriods.set("VDhwrW9DiC1", "monthly");
-dataSetPeriods.set("quMWqLxzcfO", "monthly");
-dataSetPeriods.set("dFRD2A5fdvn", "quarterly");
-dataSetPeriods.set("DFMoIONIalm", "quarterly");
-dataSetPeriods.set("EBqVAQRmiPm", "monthly");
 
 class DHIS2DataTransfer {
     static DEFAULT_BATCH_SIZE = 1000;
@@ -70,7 +59,6 @@ class DHIS2DataTransfer {
             fields,
             paging: false,
             level,
-            filter: `name:in:[Adjumani District,Alebtong District,Amolatar District,Amudat District,Amuria District,Amuru District,Apac District,Bukwo District,Bulambuli District,Busia District,Butambala District,Butebo District,Kyenjojo District,Kyotera District,Lamwo District,Mpigi District]`,
         };
 
         try {
@@ -82,54 +70,6 @@ class DHIS2DataTransfer {
             );
         }
     }
-    async fetchDataElements(dataSets) {
-        console.log("Fetching data elements...");
-        const url = `/api/dataSets.json`;
-        const params = {
-            fields: "id,dataSetElements[dataElement[id,name]],organisationUnits[id,name]",
-            paging: false,
-            filter: `id:in:[${dataSets.join(",")}]`,
-        };
-        let organisationUnits = [];
-        let dataElements = [];
-        try {
-            const { data } = await this.destApi.get(url, { params });
-            data.dataSets.forEach((ds) => {
-                dataElements = dataElements.concat(
-                    ds.dataSetElements.map((de) => de.dataElement.id),
-                );
-                organisationUnits = organisationUnits.concat(
-                    ds.organisationUnits,
-                );
-            });
-        } catch (error) {
-            console.log(
-                `Failed to fetch level ${level} organization units: ${error.message}`,
-            );
-        }
-        return {
-            organisationUnits: uniqBy(organisationUnits, "id"),
-            dataElements: uniq(dataElements),
-        };
-    }
-    async fetchDataSetUnits() {
-        console.log("Fetching data sets units...");
-        const url = `/api/dataSets.json`;
-        const params = {
-            fields: "organisationUnits[id,name]",
-            paging: false,
-            filter: `id:in:[onFoQ4ko74y,RtEYsASU7PG,ic1BSWhGOso,nGkMm2VBT4G,VDhwrW9DiC1,quMWqLxzcfO,dFRD2A5fdvn,DFMoIONIalm,EBqVAQRmiPm]`,
-        };
-
-        try {
-            const { data } = await this.destApi.get(url, { params });
-            return data.dataSets.flatMap((ds) => ds.organisationUnits);
-        } catch (error) {
-            console.log(
-                `Failed to fetch datasets organization units: ${error.message}`,
-            );
-        }
-    }
 
     /**
      * Gets combined organisation units
@@ -137,7 +77,7 @@ class DHIS2DataTransfer {
     async getOrganisations() {
         try {
             console.log("Fetching organisation units...");
-            const units = await Promise.all([this.fetchOrgUnits(3, "id,name")]);
+            const units = await this.fetchOrgUnits(3, "id,name");
             return units;
         } catch (error) {
             console.error("Failed to fetch organization units:", error.message);
@@ -172,18 +112,11 @@ class DHIS2DataTransfer {
      * Downloads and processes CSV data for an organization unit
      * @private
      */
-    async downloadCSV(
-        datasets,
-        orgUnit,
-        startDate,
-        endDate,
-        current,
-        total,
-    ) {
+    async downloadCSV(datasets, orgUnit, current, total) {
         const params = new URLSearchParams({
-            orgUnit: orgUnit.id,
-            startDate,
-            endDate,
+            orgUnit,
+            lastUpdatedDuration: "1d",
+            children: "true",
         });
         datasets.forEach((id) => params.append("dataSet", id));
 
@@ -269,18 +202,15 @@ class DHIS2DataTransfer {
     /**
      * Transfers data between DHIS2 instances
      */
-    async transferData(datasets, startDate, endDate) {
+    async transferData(datasets) {
         try {
-            const { organisationUnits } =
-                await this.fetchDataElements(datasets);
+            const organisationUnits = await this.getOrganisations();
             let errors = [];
             for (const [index, orgUnit] of organisationUnits.entries()) {
                 try {
                     await this.downloadCSV(
                         datasets,
-                        orgUnit,
-                        startDate,
-                        endDate,
+                        orgUnit.id,
                         index + 1,
                         organisationUnits.length,
                     );
@@ -330,9 +260,7 @@ async function main() {
 
     const transfer = new DHIS2DataTransfer(configs.source, configs.dest);
     const result = await transfer.transferData(
-        datasets,
-        "2024-10-01",
-        "2024-12-31",
+        datasets
     );
     console.log("Transfer completed:", result);
 }
